@@ -105,7 +105,7 @@ func GetList(rdb *redis.Client, db *sqlx.DB, ds DataSource, values interface{}) 
 	return nil
 }
 
-func GetListFull(rdb *redis.Client, db *sqlx.DB, ds DataSource, values interface{}) error {
+func GetListFullV1(rdb *redis.Client, db *sqlx.DB, ds DataSource, values interface{}) error {
 	// step 1: Check the redis cache for data
 	// 		   If data found, stop here.
 	err := getJSONValueFromRedis(rdb, ds.Key, values)
@@ -123,6 +123,56 @@ func GetListFull(rdb *redis.Client, db *sqlx.DB, ds DataSource, values interface
 
 	// step 3: Update the cache
 	setJSONValueIntoRedis(rdb, ds.Key, values)
+
+	return nil
+}
+
+type StellarCache map[string][]byte
+
+var NilCache error = errors.New("cache: nil")
+
+func getJSONValueFromStellarCache(internMap StellarCache, key string, value interface{}) error {
+	storedValue, ok := internMap[key]
+	if !ok {
+		return NilCache
+	}
+
+	err := json.Unmarshal(storedValue, value)
+	if err != nil {
+		return errors.Wrap(err, "Trying to unmarshal data from cache")
+	}
+
+	return nil
+}
+
+func setJSONValueIntoStellarCache(internMap StellarCache, key string, value interface{}) error {
+	valueIntoJSON, err := json.Marshal(value)
+	if err != nil {
+		return errors.Wrap(err, "Trying to marshal data from db into JSON")
+	}
+
+	internMap[key] = valueIntoJSON
+	return nil
+}
+
+func GetListFullV2(internMap StellarCache, db *sqlx.DB, ds DataSource, values interface{}) error {
+	// step 1: Check the redis cache for data
+	// 		   If data found, stop here.
+	err := getJSONValueFromStellarCache(internMap, ds.Key, values)
+	if err == nil {
+		return nil
+	}
+	if err != NilCache {
+		return errors.Wrap(err, "While retrieving entities")
+	}
+
+	// step 2: Check the source of truth
+	if err := sqlx.Select(db, values, ds.Query); err != nil {
+		return errors.Wrap(err, "Trying to get data from db")
+	}
+
+	// step 3: Update the cache
+	setJSONValueIntoStellarCache(internMap, ds.Key, values)
 
 	return nil
 }
